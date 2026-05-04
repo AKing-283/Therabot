@@ -304,3 +304,32 @@ try {
 } catch (e) {
     console.warn("Could not insert resourceFadeIn keyframe dynamically: ", e);
 }
+
+async function loadMetrics() {
+    try {
+        let res = await fetch("/metrics");
+        let data = await res.json();
+
+        document.getElementById("acc").innerText = data.accuracy;
+        document.getElementById("f1").innerText = data.f1_score;
+        document.getElementById("time").innerText = data.last_trained;
+        document.getElementById("feedback").innerText = data.feedback_used;
+    } catch (e) {
+        console.error("Metrics load error", e);
+    }
+}
+
+// Load on page start
+loadMetrics();
+
+// Refresh every 5 seconds
+setInterval(loadMetrics, 5000);
+
+fetch("/static/metrics.json")
+  .then(res => res.json())
+  .then(data => {
+    document.getElementById("acc").innerText = data.accuracy;
+    document.getElementById("f1").innerText = data.f1_score;
+    document.getElementById("feedback").innerText = data.feedback_used;
+    document.getElementById("time").innerText = data.last_trained;
+  });
