@@ -6,20 +6,33 @@
 </head>
 <body>
 
-<h2>Therabot Chat</h2>
+<h1>💬 Therabot Chat</h1>
 
 <div id="chat-box"></div>
 
 <div class="input-area">
-    <input type="text" id="message" placeholder="Type your message...">
+    <input type="text" id="message">
     <button onclick="sendMessage()">Send</button>
 </div>
+
+<!-- 🔄 LOADING SPINNER -->
+<div id="loader" style="display:none;">🔄 Training...</div>
+
+<!-- ⚙️ MLOPS PANEL -->
 <div id="mlops-panel">
     <h3>⚙️ Model Status</h3>
     <p>Accuracy: <span id="acc">-</span></p>
     <p>F1 Score: <span id="f1">-</span></p>
     <p>Last Trained: <span id="time">-</span></p>
     <p>Feedback Used: <span id="feedback">-</span></p>
+
+    <button onclick="retrainModel()">🚀 Retrain Model</button>
+    <div id="loading" style="display:none;">🔄 Training...</div>
+
+    <!-- MLflow link -->
+    <a href="http://127.0.0.1:5000" target="_blank">
+        🔗 Open MLflow Dashboard
+    </a>
 </div>
 
 <script src="{{ url_for('static', filename='script.js') }}"></script>

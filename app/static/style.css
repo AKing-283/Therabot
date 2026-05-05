@@ -663,3 +663,32 @@ body.dark-mode #volume-slider {
     .nav-username { margin-left: 5px; padding-left: 10px; font-size: 0.9rem; }
     .theme-toggle-btn { width: 45px; height: 45px; font-size: 1.3rem; bottom: 15px; right: 15px; }
 }
+
+body {
+    font-family: Arial;
+    text-align: center;
+    background: #f5f5f5;
+}
+
+#chat-box {
+    width: 60%;
+    height: 400px;
+    margin: auto;
+    background: white;
+    border: 1px solid #ccc;
+    overflow-y: scroll;
+    padding: 10px;
+}
+
+#mlops-panel {
+    margin-top: 20px;
+    background: white;
+    padding: 10px;
+    width: 60%;
+    margin: auto;
+}
+
+#loader {
+    font-size: 20px;
+    color: blue;
+}
