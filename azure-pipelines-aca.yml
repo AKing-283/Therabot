@@ -9,34 +9,39 @@ pr:
       - main
 
 variables:
-  pythonVersion: "3.11"
-
-  artifactName: "therabot-drop"
-  packagePath: "$(Build.ArtifactStagingDirectory)/therabot.zip"
-
   azureServiceConnection: "sc-therabot-mlops"
 
-  webAppName: "therabotmlopsapp283"
   resourceGroupName: "therabot-mlops"
+  location: "southeastasia"
 
-  mlflowTrackingUri: "http://localhost:5000"
+  acrName: "therabotmlopsacr283"
+  imageRepository: "therabot-mlops"
+
+  containerAppEnvironment: "therabot-aca-env"
+  containerAppName: "therabot-mlops-aca"
 
   modelName: "TherabotEmotionModel"
   modelStage: "Production"
 
+  mlflowTrackingUri: "http://localhost:5000"
+
+  dbPath: "/mnt/therabot-data/therabot.db"
+  metricsPath: "/mnt/therabot-data/metrics.json"
+
 stages:
 
 # =========================================================
-# BUILD STAGE
+# STAGE 1 - VALIDATE APPLICATION
 # =========================================================
 
-- stage: Build
-  displayName: "Build and Validate"
+- stage: Validate
+  displayName: "Validate Python Application"
 
   jobs:
+    - job: ValidateJob
+      displayName: "Install Dependencies and Run Checks"
 
-    - job: BuildJob
-      displayName: "Install + Validate"
+      timeoutInMinutes: 30
 
       pool:
         vmImage: "ubuntu-latest"
@@ -47,81 +52,107 @@ stages:
 
         - task: UsePythonVersion@0
           inputs:
-            versionSpec: "$(pythonVersion)"
+            versionSpec: "3.11"
             addToPath: true
 
         - script: |
             set -e
 
+            echo "Upgrading pip..."
+
             python -m pip install --upgrade pip
 
-            pip install Flask
-            pip install Flask-Login
-            pip install Flask-SQLAlchemy
-            pip install Flask-Migrate
-            pip install Flask-WTF
-            pip install Werkzeug
-            pip install gunicorn
-            pip install numpy
-            pip install pandas
-            pip install scikit-learn
-            pip install xgboost
-            pip install mlflow
-            pip install nltk
-            pip install textblob
-            pip install requests
-            pip install python-dotenv
+            echo "Installing dependencies..."
 
-            if [ -f requirements.txt ]; then
-              pip install -r requirements.txt
-            fi
+            pip install -r requirements.txt
 
-          displayName: "Install Dependencies"
+          displayName: "Install Python Dependencies"
 
         - script: |
             set -e
 
+            echo "Running Python compile checks..."
+
             python -m compileall app mlops wsgi.py
+
+            echo "Running Flask import checks..."
 
             python -c "
 from app.app import app
-print('Flask app import check passed')
+print('Flask import check passed')
 "
 
           displayName: "Flask Sanity Checks"
 
-        - task: ArchiveFiles@2
-          displayName: "Create ZIP Package"
-
-          inputs:
-            rootFolderOrFile: "$(Build.SourcesDirectory)"
-            includeRootFolder: false
-            archiveType: "zip"
-            archiveFile: "$(packagePath)"
-            replaceExistingArchive: true
-
-        - task: PublishBuildArtifacts@1
-          displayName: "Publish Build Artifact"
-
-          inputs:
-            PathtoPublish: "$(Build.ArtifactStagingDirectory)"
-            ArtifactName: "$(artifactName)"
-            publishLocation: "Container"
-
 # =========================================================
-# DEPLOY STAGE
+# STAGE 2 - BUILD + PUSH IMAGE
 # =========================================================
 
-- stage: Deploy
-  displayName: "Deploy to Azure App Service"
+- stage: BuildAndPush
+  displayName: "Build and Push Docker Image"
 
-  dependsOn: Build
+  dependsOn: Validate
   condition: succeeded()
 
   jobs:
 
-    - deployment: DeployWeb
-      displayName: "Deploy Web App"
+    - job: BuildPushJob
+      displayName: "Build Docker Image"
+
+      timeoutInMinutes: 60
+
+      pool:
+        vmImage: "ubuntu-latest"
+
+      steps:
+
+        - checkout: self
+
+        - task: AzureCLI@2
+          displayName: "Build and Push Image to ACR"
+
+          inputs:
+            azureSubscription: "$(azureServiceConnection)"
+            scriptType: "bash"
+            scriptLocation: "inlineScript"
+
+            inlineScript: |
+              set -e
+
+              IMAGE_TAG="$(Build.SourceVersion)"
+
+              echo "======================================"
+              echo "Building Docker image"
+              echo "======================================"
+
+              echo "Image tag:"
+              echo "${IMAGE_TAG}"
+
+              az acr build \
+                --registry "$(acrName)" \
+                --image "$(imageRepository):${IMAGE_TAG}" \
+                .
+
+              echo "======================================"
+              echo "Docker image pushed successfully"
+              echo "======================================"
+
+# =========================================================
+# STAGE 3 - DEPLOY TO ACA
+# =========================================================
+
+- stage: DeployACA
+  displayName: "Deploy to Azure Container Apps"
+
+  dependsOn: BuildAndPush
+  condition: succeeded()
+
+  jobs:
+
+    - deployment: DeployACAJob
+      displayName: "Deploy Container App"
+
+      timeoutInMinutes: 60
 
       environment: "production"
 
@@ -135,22 +166,8 @@ print('Flask app import check passed')
 
             steps:
 
-              - download: current
-                artifact: "$(artifactName)"
-
-              - task: AzureWebApp@1
-                displayName: "Deploy ZIP Package"
-
-                inputs:
-                  azureSubscription: "$(azureServiceConnection)"
-                  appType: "webAppLinux"
-                  appName: "$(webAppName)"
-                  package: "$(Pipeline.Workspace)/$(artifactName)/therabot.zip"
-                  runtimeStack: "PYTHON|3.11"
-                  startUpCommand: "bash startup.sh"
-
               - task: AzureCLI@2
-                displayName: "Configure App Settings"
+                displayName: "Deploy Azure Container App"
 
                 inputs:
                   azureSubscription: "$(azureServiceConnection)"
@@ -160,31 +177,131 @@ print('Flask app import check passed')
                   inlineScript: |
                     set -e
 
-                    az webapp config appsettings set \
-                      --resource-group "$(resourceGroupName)" \
-                      --name "$(webAppName)" \
-                      --settings \
-                        FLASK_ENV=production \
-                        PORT=8000 \
-                        WEBSITES_PORT=8000 \
-                        SCM_DO_BUILD_DURING_DEPLOYMENT=true \
-                        MLFLOW_TRACKING_URI="$(mlflowTrackingUri)" \
-                        MODEL_NAME="$(modelName)" \
-                        MODEL_STAGE="$(modelStage)"
-
-                    az webapp config set \
-                      --resource-group "$(resourceGroupName)" \
-                      --name "$(webAppName)" \
-                      --startup-file "bash startup.sh"
-
                     echo "======================================"
-                    echo "Deployment Completed Successfully"
+                    echo "Starting Azure Container Apps Deployment"
                     echo "======================================"
 
-                    echo "App URL:"
-                    echo "https://$(webAppName).azurewebsites.net"
+                    az config set extension.use_dynamic_install=yes_without_prompt
 
-                    echo "Health URL:"
-                    echo "https://$(webAppName).azurewebsites.net/health"
+                    IMAGE_TAG="$(Build.SourceVersion)"
 
+                    echo "Fetching ACR login server..."
+
+                    ACR_LOGIN_SERVER=$(az acr show \
+                      --name "$(acrName)" \
+                      --query loginServer \
+                      -o tsv)
+
+                    IMAGE="${ACR_LOGIN_SERVER}/$(imageRepository):${IMAGE_TAG}"
+
+                    echo "Using image:"
+                    echo "$IMAGE"
+
+                    echo "Installing Azure Container Apps extension..."
+
+                    az extension add \
+                      --name containerapp \
+                      --upgrade \
+                      --yes
+
+                    echo "Checking ACA Environment..."
+
+                    ACA_ENV_EXISTS=$(az containerapp env show \
+                      --name "$(containerAppEnvironment)" \
+                      --resource-group "$(resourceGroupName)" \
+                      --query name \
+                      -o tsv 2>/dev/null || true)
+
+                    if [ -z "$ACA_ENV_EXISTS" ]; then
+
+                      echo "Creating ACA Environment..."
+
+                      az containerapp env create \
+                        --name "$(containerAppEnvironment)" \
+                        --resource-group "$(resourceGroupName)" \
+                        --location "$(location)"
+
+                    else
+
+                      echo "ACA Environment already exists."
+
+                    fi
+
+                    echo "Checking existing Container App..."
+
+                    APP_EXISTS=$(az containerapp show \
+                      --name "$(containerAppName)" \
+                      --resource-group "$(resourceGroupName)" \
+                      --query name \
+                      -o tsv 2>/dev/null || true)
+
+                    echo "Fetching ACR credentials..."
+
+                    ACR_USERNAME=$(az acr credential show \
+                      -n "$(acrName)" \
+                      --query username \
+                      -o tsv)
+
+                    ACR_PASSWORD=$(az acr credential show \
+                      -n "$(acrName)" \
+                      --query "passwords[0].value" \
+                      -o tsv)
+
+                    if [ -z "$APP_EXISTS" ]; then
+
+                      echo "Creating Azure Container App..."
+
+                      az containerapp create \
+                        --name "$(containerAppName)" \
+                        --resource-group "$(resourceGroupName)" \
+                        --environment "$(containerAppEnvironment)" \
+                        --image "$IMAGE" \
+                        --target-port 8000 \
+                        --ingress external \
+                        --min-replicas 1 \
+                        --max-replicas 2 \
+                        --registry-server "$ACR_LOGIN_SERVER" \
+                        --registry-username "$ACR_USERNAME" \
+                        --registry-password "$ACR_PASSWORD" \
+                        --env-vars \
+                          FLASK_ENV=production \
+                          PORT=8000 \
+                          MLFLOW_TRACKING_URI="$(mlflowTrackingUri)" \
+                          MODEL_NAME="$(modelName)" \
+                          MODEL_STAGE="$(modelStage)" \
+                          DB_PATH="$(dbPath)" \
+                          METRICS_PATH="$(metricsPath)"
+
+                    else
+
+                      echo "Updating existing Azure Container App..."
+
+                      az containerapp update \
+                        --name "$(containerAppName)" \
+                        --resource-group "$(resourceGroupName)" \
+                        --image "$IMAGE" \
+                        --set-env-vars \
+                          FLASK_ENV=production \
+                          PORT=8000 \
+                          MLFLOW_TRACKING_URI="$(mlflowTrackingUri)" \
+                          MODEL_NAME="$(modelName)" \
+                          MODEL_STAGE="$(modelStage)" \
+                          DB_PATH="$(dbPath)" \
+                          METRICS_PATH="$(metricsPath)"
+
+                    fi
+
+                    echo "Fetching deployed application URL..."
+
+                    FQDN=$(az containerapp show \
+                      --name "$(containerAppName)" \
+                      --resource-group "$(resourceGroupName)" \
+                      --query properties.configuration.ingress.fqdn \
+                      -o tsv)
+
+                    echo "======================================"
+                    echo "DEPLOYMENT SUCCESSFUL"
+                    echo "======================================"
+                    echo "Application URL:"
+                    echo "https://${FQDN}"
                     echo "======================================"
