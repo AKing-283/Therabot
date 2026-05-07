@@ -1,0 +1,166 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  azureServiceConnection: "YOUR_AZURE_SERVICE_CONNECTION"
+  resourceGroupName: "therabot-mlops"
+  location: "southeastasia"
+  acrName: "YOUR_ACR_NAME"
+  containerAppEnvironment: "therabot-aca-env"
+  containerAppName: "therabot-mlops-aca"
+  imageRepository: "therabot-mlops"
+  modelName: "TherabotEmotionModel"
+  modelStage: "Production"
+  mlflowTrackingUri: "YOUR_MLFLOW_TRACKING_URI"
+  # For stateful SQLite in ACA, mount an Azure File Share and set these paths.
+  dbPath: "/mnt/therabot-data/therabot.db"
+  metricsPath: "/mnt/therabot-data/metrics.json"
+
+stages:
+  - stage: Validate
+    displayName: Validate Python App
+    jobs:
+      - job: ValidateJob
+        displayName: Install + Sanity Checks
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - checkout: self
+
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "3.11"
+              addToPath: true
+
+          - script: |
+              python -m pip install --upgrade pip
+              pip install -r requirements-mlops.txt
+            displayName: Install Dependencies
+
+          - script: |
+              python -m compileall app mlops wsgi.py
+              python -c "from app.app import app; print('Flask import check passed')"
+            displayName: Python/Flask Checks
+
+  - stage: BuildAndPush
+    displayName: Build and Push Container
+    dependsOn: Validate
+    condition: succeeded()
+    jobs:
+      - job: BuildPushJob
+        displayName: ACR Build
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: Build and Push to ACR
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                set -e
+                IMAGE_TAG="$(Build.SourceVersion)"
+                az acr build \
+                  --registry "$(acrName)" \
+                  --image "$(imageRepository):${IMAGE_TAG}" \
+                  .
+
+  - stage: DeployACA
+    displayName: Deploy to Azure Container Apps
+    dependsOn: BuildAndPush
+    condition: succeeded()
+    jobs:
+      - deployment: DeployACAJob
+        displayName: Create/Update Container App
+        environment: "production"
+        pool:
+          vmImage: "ubuntu-latest"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: Deploy ACA Revision
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      set -e
+                      IMAGE_TAG="$(Build.SourceVersion)"
+                      ACR_LOGIN_SERVER="$(az acr show -n "$(acrName)" --query loginServer -o tsv)"
+                      IMAGE="${ACR_LOGIN_SERVER}/$(imageRepository):${IMAGE_TAG}"
+
+                      az extension add --name containerapp --upgrade --yes
+
+                      ACA_ENV_EXISTS=$(az containerapp env show \
+                        --name "$(containerAppEnvironment)" \
+                        --resource-group "$(resourceGroupName)" \
+                        --query "name" -o tsv 2>/dev/null || true)
+
+                      if [ -z "$ACA_ENV_EXISTS" ]; then
+                        az containerapp env create \
+                          --name "$(containerAppEnvironment)" \
+                          --resource-group "$(resourceGroupName)" \
+                          --location "$(location)"
+                      fi
+
+                      APP_EXISTS=$(az containerapp show \
+                        --name "$(containerAppName)" \
+                        --resource-group "$(resourceGroupName)" \
+                        --query "name" -o tsv 2>/dev/null || true)
+
+                      if [ -z "$APP_EXISTS" ]; then
+                        ACR_USERNAME=$(az acr credential show -n "$(acrName)" --query username -o tsv)
+                        ACR_PASSWORD=$(az acr credential show -n "$(acrName)" --query "passwords[0].value" -o tsv)
+
+                        az containerapp create \
+                          --name "$(containerAppName)" \
+                          --resource-group "$(resourceGroupName)" \
+                          --environment "$(containerAppEnvironment)" \
+                          --image "$IMAGE" \
+                          --target-port 8000 \
+                          --ingress external \
+                          --min-replicas 1 \
+                          --max-replicas 2 \
+                          --registry-server "$ACR_LOGIN_SERVER" \
+                          --registry-username "$ACR_USERNAME" \
+                          --registry-password "$ACR_PASSWORD" \
+                          --env-vars \
+                            FLASK_ENV=production \
+                            PORT=8000 \
+                            MLFLOW_TRACKING_URI="$(mlflowTrackingUri)" \
+                            MODEL_NAME="$(modelName)" \
+                            MODEL_STAGE="$(modelStage)" \
+                            DB_PATH="$(dbPath)" \
+                            METRICS_PATH="$(metricsPath)"
+                      else
+                        az containerapp update \
+                          --name "$(containerAppName)" \
+                          --resource-group "$(resourceGroupName)" \
+                          --image "$IMAGE" \
+                          --set-env-vars \
+                            FLASK_ENV=production \
+                            PORT=8000 \
+                            MLFLOW_TRACKING_URI="$(mlflowTrackingUri)" \
+                            MODEL_NAME="$(modelName)" \
+                            MODEL_STAGE="$(modelStage)" \
+                            DB_PATH="$(dbPath)" \
+                            METRICS_PATH="$(metricsPath)"
+                      fi
+
+                      FQDN=$(az containerapp show \
+                        --name "$(containerAppName)" \
+                        --resource-group "$(resourceGroupName)" \
+                        --query properties.configuration.ingress.fqdn -o tsv)
+                      echo "Container App URL: https://${FQDN}"
