@@ -9,16 +9,16 @@ pr:
       - main
 
 variables:
-  azureServiceConnection: "YOUR_AZURE_SERVICE_CONNECTION"
+  azureServiceConnection: "sc-therabot-mlops"
   resourceGroupName: "therabot-mlops"
   location: "southeastasia"
-  acrName: "YOUR_ACR_NAME"
+  acrName: "therabotmlopsacr283"
   containerAppEnvironment: "therabot-aca-env"
   containerAppName: "therabot-mlops-aca"
   imageRepository: "therabot-mlops"
   modelName: "TherabotEmotionModel"
   modelStage: "Production"
-  mlflowTrackingUri: "YOUR_MLFLOW_TRACKING_URI"
+  mlflowTrackingUri: "http://localhost:5000"
   # For stateful SQLite in ACA, mount an Azure File Share and set these paths.
   dbPath: "/mnt/therabot-data/therabot.db"
   metricsPath: "/mnt/therabot-data/metrics.json"
