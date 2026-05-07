@@ -2,9 +2,10 @@ import mlflow
 import os
 from mlops.train import train   # ✅ IMPORTANT FIXED IMPORT
 
-MODEL_NAME = "TherabotEmotionModel"
+MODEL_NAME = os.getenv("MODEL_NAME", "TherabotEmotionModel")
 
-mlflow.set_tracking_uri("http://127.0.0.1:5000")
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 
 def retrain():

@@ -18,8 +18,11 @@ DATA_PATH = os.path.join(BASE_DIR, "data", "text_emotions.csv")
 DB_PATH = os.path.join(BASE_DIR, "app", "instance", "therabot.db")
 METRICS_PATH = os.path.join(BASE_DIR, "app", "static", "metrics.json")
 
-mlflow.set_tracking_uri("http://127.0.0.1:5000")
-mlflow.set_experiment("therabot-emotion")
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
+MLFLOW_EXPERIMENT = os.getenv("MLFLOW_EXPERIMENT", "therabot-emotion")
+
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+mlflow.set_experiment(MLFLOW_EXPERIMENT)
 
 
 # ---------------- LOAD FEEDBACK ----------------

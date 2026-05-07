@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite
+*.sqlite3
+mlartifacts
+therabot-clean
+deploy.zip
+*.ipynb
+.env
+node_modules
+

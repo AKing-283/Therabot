@@ -1,0 +1,108 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  pythonVersion: "3.11"
+  artifactName: "therabot-drop"
+  packagePath: "$(Build.ArtifactStagingDirectory)/therabot.zip"
+  # Set these in Azure DevOps pipeline variables or variable groups.
+  azureServiceConnection: "YOUR_AZURE_SERVICE_CONNECTION"
+  webAppName: "YOUR_APP_SERVICE_NAME"
+  resourceGroupName: "YOUR_RESOURCE_GROUP"
+  mlflowTrackingUri: "YOUR_MLFLOW_TRACKING_URI"
+  modelName: "TherabotEmotionModel"
+  modelStage: "Production"
+
+stages:
+  - stage: Build
+    displayName: Build and Validate
+    jobs:
+      - job: BuildJob
+        displayName: Build Job
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - checkout: self
+
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "$(pythonVersion)"
+              addToPath: true
+
+          - script: |
+              python -m pip install --upgrade pip
+              pip install -r requirements-mlops.txt
+            displayName: Install Dependencies
+
+          - script: |
+              python -m compileall app mlops wsgi.py
+              python -c "from app.app import app; print('Flask app import check passed')"
+            displayName: Flask Sanity Checks
+
+          - task: ArchiveFiles@2
+            displayName: Create Deployment Package
+            inputs:
+              rootFolderOrFile: "$(Build.SourcesDirectory)"
+              includeRootFolder: false
+              archiveType: "zip"
+              archiveFile: "$(packagePath)"
+              replaceExistingArchive: true
+
+          - task: PublishBuildArtifacts@1
+            displayName: Publish Build Artifacts
+            inputs:
+              PathtoPublish: "$(Build.ArtifactStagingDirectory)"
+              ArtifactName: "$(artifactName)"
+              publishLocation: "Container"
+
+  - stage: Deploy
+    displayName: Deploy to Azure App Service
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - deployment: DeployWeb
+        displayName: Deploy Web App
+        environment: "production"
+        pool:
+          vmImage: "ubuntu-latest"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: "$(artifactName)"
+
+                - task: AzureWebApp@1
+                  displayName: Deploy Zip Package
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    appType: "webAppLinux"
+                    appName: "$(webAppName)"
+                    package: "$(Pipeline.Workspace)/$(artifactName)/therabot.zip"
+                    runtimeStack: "PYTHON|3.11"
+                    startUpCommand: "bash startup.sh"
+
+                - task: AzureCLI@2
+                  displayName: Set App Settings
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      az webapp config appsettings set \
+                        --resource-group "$(resourceGroupName)" \
+                        --name "$(webAppName)" \
+                        --settings \
+                          FLASK_ENV=production \
+                          PORT=8000 \
+                          WEBSITES_PORT=8000 \
+                          MLFLOW_TRACKING_URI="$(mlflowTrackingUri)" \
+                          MODEL_NAME="$(modelName)" \
+                          MODEL_STAGE="$(modelStage)"

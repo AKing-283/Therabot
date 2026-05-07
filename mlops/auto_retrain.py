@@ -1,9 +1,11 @@
 import os
 import time
 import subprocess
-import pandas as pd
+import sqlite3
+import sys
 
-FEEDBACK_PATH = "data/feedback.csv"
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DB_PATH = os.getenv("DB_PATH", os.path.join(BASE_DIR, "app", "instance", "therabot.db"))
 LAST_COUNT_FILE = "mlops/last_count.txt"
 
 CHECK_INTERVAL = 60  # seconds (1 min)
@@ -11,10 +13,16 @@ MIN_NEW_SAMPLES = 5  # retrain threshold
 
 
 def get_feedback_count():
-    if not os.path.exists(FEEDBACK_PATH):
+    if not os.path.exists(DB_PATH):
         return 0
-    df = pd.read_csv(FEEDBACK_PATH)
-    return len(df)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM chat_history WHERE correct_emotion IS NOT NULL"
+    )
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
 
 
 def get_last_count():
@@ -31,15 +39,16 @@ def update_last_count(count):
 
 def run_pipeline():
     print("\n🚀 Triggering retraining pipeline...\n")
+    python_exec = sys.executable
 
     # STEP 1: Train
-    subprocess.run(["python", "mlops/train.py"])
+    subprocess.run([python_exec, "mlops/train.py"])
 
     # STEP 2: Register
-    subprocess.run(["python", "mlops/register.py"])
+    subprocess.run([python_exec, "mlops/register.py"])
 
     # STEP 3: Promote
-    subprocess.run(["python", "mlops/promote.py"])
+    subprocess.run([python_exec, "mlops/promote.py"])
 
     print("\n✅ Retraining pipeline completed\n")
 
