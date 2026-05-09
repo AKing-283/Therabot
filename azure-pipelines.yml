@@ -19,7 +19,8 @@ variables:
   webAppName: "therabotmlopsapp283"
   resourceGroupName: "therabot-mlops"
 
-  mlflowTrackingUri: "http://localhost:5000"
+  # IMPORTANT FIX
+  mlflowTrackingUri: "file:./mlruns"
 
   modelName: "TherabotEmotionModel"
   modelStage: "Production"
@@ -50,6 +51,10 @@ stages:
             versionSpec: "$(pythonVersion)"
             addToPath: true
 
+        # =================================================
+        # INSTALL DEPENDENCIES
+        # =================================================
+
         - script: |
             set -e
 
@@ -71,6 +76,14 @@ stages:
             pip install textblob
             pip install requests
             pip install python-dotenv
+            pip install joblib
+            pip install scipy
+            pip install jinja2
+            pip install itsdangerous
+            pip install click
+            pip install blinker
+            pip install sqlalchemy
+            pip install alembic
 
             if [ -f requirements.txt ]; then
               pip install -r requirements.txt
@@ -78,14 +91,24 @@ stages:
 
           displayName: "Install Dependencies"
 
+        # =================================================
+        # PYTHON + FLASK CHECKS
+        # =================================================
+
         - script: |
             set -e
+
+            export MLFLOW_TRACKING_URI="file:./mlruns"
 
             python -m compileall app mlops wsgi.py
 
             python -c "from app.app import app; print('Flask app import check passed')"
 
           displayName: "Flask Sanity Checks"
+
+        # =================================================
+        # CREATE ZIP
+        # =================================================
 
         - task: ArchiveFiles@2
           displayName: "Create ZIP Package"
@@ -97,13 +120,26 @@ stages:
             archiveFile: "$(packagePath)"
             replaceExistingArchive: true
 
-        - task: PublishBuildArtifacts@1
-          displayName: "Publish Build Artifact"
+        # =================================================
+        # VERIFY ZIP EXISTS
+        # =================================================
+
+        - script: |
+            echo "Listing artifact directory..."
+            ls -la $(Build.ArtifactStagingDirectory)
+
+          displayName: "Verify ZIP Exists"
+
+        # =================================================
+        # FIXED ARTIFACT PUBLISH
+        # =================================================
+
+        - task: PublishPipelineArtifact@1
+          displayName: "Publish Pipeline Artifact"
 
           inputs:
-            PathtoPublish: "$(Build.ArtifactStagingDirectory)"
-            ArtifactName: "$(artifactName)"
-            publishLocation: "Container"
+            targetPath: "$(Build.ArtifactStagingDirectory)"
+            artifact: "$(artifactName)"
 
 # =========================================================
 # DEPLOY STAGE
@@ -132,8 +168,26 @@ stages:
 
             steps:
 
+              # ===========================================
+              # DOWNLOAD PIPELINE ARTIFACT
+              # ===========================================
+
               - download: current
                 artifact: "$(artifactName)"
+
+              # ===========================================
+              # VERIFY DOWNLOADED FILE
+              # ===========================================
+
+              - script: |
+                  echo "Downloaded artifact files:"
+                  ls -la $(Pipeline.Workspace)/$(artifactName)
+
+                displayName: "Verify Downloaded Artifact"
+
+              # ===========================================
+              # DEPLOY TO AZURE WEB APP
+              # ===========================================
 
               - task: AzureWebApp@1
                 displayName: "Deploy ZIP Package"
@@ -145,6 +199,10 @@ stages:
                   package: "$(Pipeline.Workspace)/$(artifactName)/therabot.zip"
                   runtimeStack: "PYTHON|3.11"
                   startUpCommand: "bash startup.sh"
+
+              # ===========================================
+              # CONFIGURE APP SETTINGS
+              # ===========================================
 
               - task: AzureCLI@2
                 displayName: "Configure App Settings"
